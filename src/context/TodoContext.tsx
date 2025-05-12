@@ -13,9 +13,9 @@ interface TodoContextType {
   filteredTodos: Todo[];
   setCurrentFilter: (filter: TodoFilter) => void;
   setSearchQuery: (query: string) => void;
-  addTodo: (data: TodoFormData) => Promise<void>;
-  updateTodo: (id: string, data: Partial<Todo>) => Promise<void>;
-  deleteTodo: (id: string) => Promise<void>;
+  addTodo: (data: TodoFormData) => Promise<string | undefined>;
+  updateTodo: (id: string, data: Partial<Todo>) => Promise<string | undefined>;
+  deleteTodo: (id: string) => Promise<string | undefined>;
   toggleStatus: (id: string, newStatus: TodoStatus) => Promise<void>;
 }
 
@@ -28,12 +28,8 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentFilter, setCurrentFilter] = useState<TodoFilter>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Filtered todos based on status and search query
   const filteredTodos = todos
-    .filter(todo => {
-      if (currentFilter === 'all') return true;
-      return todo.status === currentFilter;
-    })
+    .filter(todo => (currentFilter === 'all' ? true : todo.status === currentFilter))
     .filter(todo => {
       if (!searchQuery.trim()) return true;
       return (
@@ -43,9 +39,15 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })
     .sort((a, b) => a.position - b.position);
 
-  // Fetch todos from Supabase
   useEffect(() => {
+    if (!supabase) {
+      setError('Supabase is not configured.');
+      setLoading(false);
+      return;
+    }
+
     const fetchTodos = async () => {
+     if (!supabase) return toast.error('Supabase not available');
       try {
         const { data, error } = await supabase
           .from('todos')
@@ -65,11 +67,9 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     fetchTodos();
 
-    // Subscribe to changes
     const subscription = supabase
       .channel('todos-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'todos' }, (payload) => {
-        console.log('Change received!', payload);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'todos' }, () => {
         fetchTodos();
       })
       .subscribe();
@@ -79,8 +79,9 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Add a new todo
   const addTodo = async (data: TodoFormData) => {
+    if (!supabase) return toast.error('Supabase not available');
+
     try {
       const maxPositionResult = await supabase
         .from('todos')
@@ -88,9 +89,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .order('position', { ascending: false })
         .limit(1);
 
-      const maxPosition = maxPositionResult.data && maxPositionResult.data.length > 0
-        ? maxPositionResult.data[0].position + 1
-        : 0;
+      const maxPosition = maxPositionResult.data?.[0]?.position ?? -1;
 
       const newTodo: Todo = {
         id: uuidv4(),
@@ -100,13 +99,13 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         created_at: new Date().toISOString(),
         updated_at: null,
         priority: data.priority,
-        position: maxPosition,
+        position: maxPosition + 1,
       };
 
       const { error } = await supabase.from('todos').insert(newTodo);
 
       if (error) throw error;
-      
+
       setTodos(prev => [...prev, newTodo]);
       toast.success('Todo added successfully!');
     } catch (err) {
@@ -115,8 +114,9 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Update a todo
   const updateTodo = async (id: string, data: Partial<Todo>) => {
+    if (!supabase) return toast.error('Supabase not available');
+
     try {
       const { error } = await supabase
         .from('todos')
@@ -124,7 +124,7 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .eq('id', id);
 
       if (error) throw error;
-      
+
       setTodos(prev =>
         prev.map(todo => (todo.id === id ? { ...todo, ...data, updated_at: new Date().toISOString() } : todo))
       );
@@ -135,13 +135,14 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Delete a todo
   const deleteTodo = async (id: string) => {
+    if (!supabase) return toast.error('Supabase not available');
+
     try {
       const { error } = await supabase.from('todos').delete().eq('id', id);
 
       if (error) throw error;
-      
+
       setTodos(prev => prev.filter(todo => todo.id !== id));
       toast.success('Todo deleted successfully!');
     } catch (err) {
@@ -150,13 +151,8 @@ export const TodoProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Toggle status
   const toggleStatus = async (id: string, newStatus: TodoStatus) => {
-    try {
-      await updateTodo(id, { status: newStatus });
-    } catch (err) {
-      console.error('Error toggling status:', err);
-    }
+    await updateTodo(id, { status: newStatus });
   };
 
   return (
